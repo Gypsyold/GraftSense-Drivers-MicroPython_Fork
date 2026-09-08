@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # @Time    : 2026/08/11 00:00
 # @Author  : Jose D. Montoya
-# @File    : stts22h_driver.py
+# @File    : stts22h.py
 # @Description : MicroPython driver for the STTS22H temperature sensor
 # @License : MIT
 

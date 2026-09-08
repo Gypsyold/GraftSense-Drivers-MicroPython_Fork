@@ -1,7 +1,7 @@
 {
   "name": "stts22h_driver",
   "urls": [
-    ["stts22h_driver.py", "code/stts22h_driver.py"]
+    ["stts22h.py", "code/stts22h.py"]
   ],
   "version": "1.0.0",
   "_comments": {

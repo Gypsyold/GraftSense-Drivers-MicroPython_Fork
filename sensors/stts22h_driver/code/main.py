@@ -10,7 +10,7 @@
 
 import time
 from machine import I2C, Pin
-from stts22h_driver import STTS22H
+from stts22h import STTS22H
 
 # ==================== 全局变量 ====================
 
