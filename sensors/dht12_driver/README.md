@@ -47,7 +47,7 @@
 | 项目 | 版本/说明 |
 |------|-----------|
 | MicroPython 固件 | v1.23.0+ |
-| 驱动版本 | v1.1.0 |
+| 驱动版本 | v1.0.0 |
 | 依赖库 | `machine`（内置） |
 
 ## 文件结构
@@ -272,7 +272,7 @@ finally:
 
 | 版本号 | 日期 | 作者 | 修改说明 |
 |--------|------|------|----------|
-| v1.1.0 | 2026-07-31 | Mike Causer | 按 GraftSense 规范重构：添加完整 docstring、参数校验、类型注解、deinit()、分区标注 |
+| v1.0.0 | 2026-07-31 | Mike Causer | 按 GraftSense 规范重构：添加完整 docstring、参数校验、类型注解、deinit()、分区标注 |
 
 ## 联系方式
 
@@ -280,7 +280,7 @@ finally:
 
 ## 许可协议
 
-```tex
+```text
 MIT License
 
 Copyright (c) 2016 Mike Causer

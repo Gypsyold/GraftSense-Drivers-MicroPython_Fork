@@ -1,4 +1,4 @@
-﻿# TSic 506F 温度传感器 MicroPython 驱动
+# TSic 506F 温度传感器 MicroPython 驱动
 
 ## 目录
 

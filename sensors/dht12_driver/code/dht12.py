@@ -6,7 +6,7 @@
 # @Description : Aosong DHT12 温湿度传感器 I2C 驱动
 # @License : MIT
 
-__version__ = "1.1.0"
+__version__ = "1.0.0"
 __author__ = "Mike Causer"
 __license__ = "MIT"
 __platform__ = "MicroPython v1.23"
