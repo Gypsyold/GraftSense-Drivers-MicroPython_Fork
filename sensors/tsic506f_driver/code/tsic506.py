@@ -12,7 +12,7 @@
 import micropython
 
 from array import array
-from machine import Pin
+from machine import Pin, disable_irq, enable_irq
 from micropython import alloc_emergency_exception_buf, const
 
 # 为 ISR 回调预留紧急异常缓冲区（100 字节）
@@ -35,10 +35,16 @@ _HAS_SCHEDULE = hasattr(micropython, "schedule")
 _HAS_NATIVE = hasattr(micropython, "native")
 _HAS_VIPER = hasattr(micropython, "viper")
 
-_native = micropython.native if _HAS_NATIVE else (lambda f: f)
-_viper = micropython.viper if _HAS_VIPER else (lambda f: f)
-
 # ======================================== 功能函数 ============================================
+
+
+def _identity(function: callable) -> callable:
+    """在缺少 native/viper 装饰器时保持函数原样。"""
+    return function
+
+
+_native = micropython.native if _HAS_NATIVE else _identity
+_viper = micropython.viper if _HAS_VIPER else _identity
 
 
 def _log(enabled: bool, msg: str) -> None:
@@ -122,6 +128,7 @@ class TSIC506F:
         errorcount (int): 累计解码错误数
         timeout_counter (int): 连续错误计数
         timeout_limit (int): 连续错误阈值
+        dropped_frames (int): 因帧不完整或调度背压丢弃的帧数
     Methods:
         T(): 获取滤波后的摄氏温度
         decode(): 解码一帧 ZACwire 数据
@@ -142,6 +149,7 @@ class TSIC506F:
         errorcount (int): Total decode error count
         timeout_counter (int): Continuous error counter
         timeout_limit (int): Continuous error threshold
+        dropped_frames (int): Frames discarded due to incomplete data or scheduling backpressure
     Methods:
         T(): Get filtered temperature in Celsius
         decode(): Decode one ZACwire frame
@@ -180,8 +188,12 @@ class TSIC506F:
         "_rawT",
         "_sm0",
         "_sm1",
+        "_count_callback",
+        "_detect_callback",
         "_decode_callback",
         "_decode_pending",
+        "_buffer_overflow",
+        "dropped_frames",
         "_debug",
         "_startup_frames",
         "_startup_count",
@@ -267,6 +279,8 @@ class TSIC506F:
         self.timeout_counter = 0
         self.timeout_limit = timeout
         self._decode_pending = False
+        self._buffer_overflow = False
+        self.dropped_frames = 0
         self._debug = debug
 
         # 预分配缓冲区，避免在中断调度路径中分配内存
@@ -296,40 +310,109 @@ class TSIC506F:
             freq=self.SM1_FREQ,
         )
 
-        # 绑定回调时预先创建函数对象，避免在 ISR 中分配内存
-        self._sm0.irq(lambda _sm: self._irq_count())
-        self._sm1.irq(lambda _sm: self._irq_detect())
-        self._decode_callback = lambda _arg: self.decode()
+        # 预绑定具名回调，避免在 ISR 路径中创建匿名函数对象
+        self._count_callback = self._create_count_callback()
+        self._detect_callback = self._create_detect_callback()
+        self._decode_callback = self._create_decode_callback()
+        self._sm0.irq(handler=self._count_callback)
+        self._sm1.irq(handler=self._detect_callback)
 
         _log(self._debug, "initialized on pin=%s sm=%s" % (pin, sm))
 
         if start:
             self.start()
 
+    def _create_count_callback(self) -> callable:
+        """创建状态机 0 的具名预绑定 IRQ 回调。"""
+
+        def count_callback(_state_machine: object) -> None:
+            self._irq_count()
+
+        return count_callback
+
+    def _create_detect_callback(self) -> callable:
+        """创建状态机 1 的具名预绑定 IRQ 回调。"""
+
+        def detect_callback(_state_machine: object) -> None:
+            self._irq_detect()
+
+        return detect_callback
+
+    def _create_decode_callback(self) -> callable:
+        """创建 micropython.schedule 使用的具名预绑定回调。"""
+
+        def decode_callback(_arg: int) -> None:
+            self._scheduled_decode()
+
+        return decode_callback
+
     @_viper
-    def _irq_count(self) -> int:
+    def _irq_count(self) -> None:
         """
         保存状态机 0 读取到的脉冲长度计数。
         Notes:
             - ISR-safe: 是
         """
-        self._buf[self._buf_pos] = int(self._sm0.get())
-        self._buf_pos = int(self._buf_pos) + 1
+        # 始终读取 FIFO，防止溢出后 PIO 接收 FIFO 堵塞
+        pulse_length = int(self._sm0.get())
+        buffer_position = int(self._buf_pos)
+
+        # 仅在预分配缓冲区有容量时写入，避免 IRQ 中发生数组越界
+        if buffer_position < int(self.buflen):
+            self._buf[buffer_position] = pulse_length
+            self._buf_pos = buffer_position + 1
+        else:
+            # 当前帧已无空间，等待长脉冲帧边界后整体丢弃并恢复
+            self._buffer_overflow = True
 
     @_native
     def _irq_detect(self) -> None:
         """
         备份当前帧数据，并在主上下文中调度解码。
         Notes:
-            - ISR-safe: 是（只复制数据并调度，不执行解码或阻塞操作）
+            - ISR-safe: 是（只复制完整帧并调度，不执行解码或阻塞操作）
         """
+        # 溢出或非完整帧不可解码；在帧边界复位后等待下一完整帧
+        if self._buffer_overflow or int(self._buf_pos) != int(self.buflen):
+            self._buffer_overflow = False
+            self._buf_pos = 0
+            self.dropped_frames = int(self.dropped_frames) + 1
+            return
+
+        # 已有解码任务在等待或执行时合并新帧，保护已备份的数据不被覆盖
+        if self._decode_pending:
+            self._buf_pos = 0
+            self.dropped_frames = int(self.dropped_frames) + 1
+            return
+
+        # 仅复制完整帧，避免主上下文读取 ISR 正在填充的采集缓冲区
         self._savedbuf[:] = self._buf[:]
         self._buf_pos = 0
+        self._decode_pending = True
+
         if _HAS_SCHEDULE:
-            micropython.schedule(self._decode_callback, 0)
+            try:
+                micropython.schedule(self._decode_callback, 0)
+            except RuntimeError:
+                # 调度队列已满时撤销 pending 标志，并记录本帧被丢弃
+                self._decode_pending = False
+                self.dropped_frames = int(self.dropped_frames) + 1
         else:
             # 无 schedule 时只设置待处理标志，由 T() 在主循环中处理
-            self._decode_pending = True
+            pass
+
+    @_native
+    def _scheduled_decode(self) -> None:
+        """
+        在主上下文中清除调度标志并解码已备份帧。
+        Notes:
+            - ISR-safe: 否
+        """
+        # 共享标志由 IRQ 和主上下文共同访问，短暂关闭 IRQ 保证读写原子性
+        irq_state = disable_irq()
+        self._decode_pending = False
+        enable_irq(irq_state)
+        self.decode()
 
     def T(self) -> float:
         """
@@ -354,9 +437,13 @@ class TSIC506F:
         if not self._sm0.active():
             raise TSIC506FNotRunning("TSIC506F state machines are not running")
 
-        if self._decode_pending:
-            self._decode_pending = False
-            self.decode()
+        # 未提供 schedule() 的固件在读取时同步完成已挂起的解码
+        if not _HAS_SCHEDULE:
+            irq_state = disable_irq()
+            decode_pending = self._decode_pending
+            enable_irq(irq_state)
+            if decode_pending:
+                self._scheduled_decode()
 
         if self._sample_count == 0:
             raise TSIC506FNotRunning("No valid TSIC506F sample yet")

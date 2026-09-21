@@ -16,12 +16,14 @@
 
 ## 简介
 
-本驱动用于瑞萨（Renesas）HS3003 温湿度传感器，通过 I2C 总线读取温度和相对湿度数据。驱动保持原版公共 API，提供 `measurements`、`temperature`、`relative_humidity` 三个读取接口，并由外部注入 I2C 总线实例。
+本驱动用于瑞萨（Renesas）HS3003 温湿度传感器，通过 I2C 总线读取温度和相对湿度数据。驱动保持原版公共 API，提供 `measurements`、`temperature`、`relative_humidity` 三个读取接口和 `status` 状态属性，并由外部注入 I2C 总线实例。
 
 ## 主要功能
 
 - 支持 HS3003 默认 I2C 地址 `0x44`。
 - 读取温度和相对湿度，并返回浮点结果。
+- 检测状态位中的 stale 数据；最多重试 2 次，仍失败时抛出 `HS3003StaleDataError`。
+- 通过只读 `status` 属性公开最近一次读取状态。
 - 保留原版 `measurements`、`temperature`、`relative_humidity` API。
 - I2C 总线由外部注入，驱动内部不创建硬件总线。
 - 提供 `deinit()` 释放驱动持有的硬件引用。
@@ -76,14 +78,17 @@ hs3003_driver/
 
 ```python
 from machine import I2C, Pin
-from hs3003 import HS3003
+from hs3003 import HS3003, HS3003StaleDataError
 
 i2c = I2C(0, scl=Pin(5), sda=Pin(4), freq=100000)
 sensor = HS3003(i2c, address=0x44)
 
-temperature, humidity = sensor.measurements
-print("Temperature: %.2f C" % temperature)
-print("Humidity: %.2f %%" % humidity)
+try:
+    temperature, humidity = sensor.measurements
+    print("Temperature: %.2f C" % temperature)
+    print("Humidity: %.2f %%" % humidity)
+except HS3003StaleDataError:
+    print("Measurement is stale; retry later")
 
 sensor.deinit()
 ```
@@ -97,7 +102,7 @@ sensor.deinit()
 | I2C 地址 | 默认 `0x44` |
 | I2C 频率 | `main.py` 默认使用 100 kHz |
 | 读取时序 | 每次读取会发送唤醒命令并等待 100 ms，随后读取 4 字节数据 |
-| 状态位 | 数据停滞时状态位为 1，驱动保存到私有属性 `_status_bit` |
+| 状态位 | `sensor.status` 返回最近一次状态：`-1` 表示尚未读取、`0` 表示正常、`1` 表示 stale。stale 时驱动会执行完整测量时序并最多重试 2 次；仍失败则抛出 `HS3003StaleDataError`，不会返回该数据 |
 | ID 验证 | HS3003 无固定芯片 ID 寄存器，测试文件通过最小测量读取判断器件是否响应 |
 | 实机验证 | 本任务未执行设备连接、烧录、串口或 mpremote 测试 |
 
@@ -113,20 +118,4 @@ sensor.deinit()
 
 ## 许可协议
 
-```tex
-MIT License
-
-Copyright (c) 2016 Mike Causer
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
+本包采用 MIT 许可证，完整许可证及版权归属见同包 [LICENSE](LICENSE)。

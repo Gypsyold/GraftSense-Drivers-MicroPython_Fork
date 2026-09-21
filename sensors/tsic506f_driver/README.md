@@ -23,8 +23,9 @@
 1. 基于 RP2040 PIO 双状态机完成脉冲宽度采集和帧起始长脉冲检测；
 2. 实现 `ZACwire` 11 位温度数据解码；
 3. 支持中值滤波窗口配置；
-4. 通过 `micropython.schedule` 将解码移到主上下文，降低中断负载；
-5. 提供 `start()`、`stop()`、`deinit()` 完整的资源生命周期管理。
+4. 通过 `micropython.schedule` 将解码移到主上下文，并合并待处理帧以避免调度队列溢出；
+5. IRQ 采集缓冲区具有固定上界，异常脉冲导致的非完整帧会在下一帧边界被安全丢弃；
+6. 提供 `start()`、`stop()`、`deinit()` 完整的资源生命周期管理。
 
 ## 硬件要求
 
@@ -104,6 +105,7 @@ while True:
 | 首帧等待 | 驱动默认丢弃上电后的第 1 个有效帧（`startup_frames=1`），且首帧解码完成前 `T()` 会抛出 `TSIC506FNotRunning`，需在循环中捕获重试 |
 | 引脚配置 | 上电后建议先下拉数据引脚再切换为输入，降低首次启动抖动 |
 | 供电 | 确保传感器供电稳定，避免数据线上引入明显噪声 |
+| 帧丢弃计数 | `dropped_frames` 记录因缓冲区溢出、非完整帧或调度背压而丢弃的帧。该值持续增加时，应降低主循环负载或检查数据线信号质量 |
 
 ## 版本记录
 
@@ -120,20 +122,4 @@ while True:
 
 ## 许可协议
 
-```tex
-MIT License
-
-Copyright (c) 2016 Mike Causer
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
+本包采用 MIT 许可证，完整许可证及版权归属见同包 [LICENSE](LICENSE)。
